@@ -2,7 +2,7 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 
 const apiKey = import.meta.env.VITE_GEMINI_API_KEY; 
 const genAI = new GoogleGenerativeAI(apiKey);
-const model = genAI.getGenerativeModel({ model: "gemma-3-27b-it" });
+const model = genAI.getGenerativeModel({ model: "gemma-4-31b-it" });
 
 const cleanJSON = (text) => {
   const start = text.indexOf('{'); // Start of object
