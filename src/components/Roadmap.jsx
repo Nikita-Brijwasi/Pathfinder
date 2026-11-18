@@ -1,9 +1,9 @@
 import React from 'react';
 import { motion } from 'framer-motion';
-import { ArrowLeft, CheckCircle, AlertTriangle, Circle, Layers, Clock, Play, BookText } from 'lucide-react';
+import { ArrowLeft, CheckCircle, AlertTriangle, Circle, Layers, Clock, Play, BookText, Brain } from 'lucide-react';
 import { ProgressRing } from './Shared';
 
-export const Roadmap = ({ track, onBack, onStartLesson, onStartQuiz }) => {
+export const Roadmap = ({ track, onBack, onStartLesson, onStartQuiz, onViewFlashcards }) => {
   if (!track) return null;
   return (
     <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }}>
@@ -56,6 +56,11 @@ export const Roadmap = ({ track, onBack, onStartLesson, onStartQuiz }) => {
                       {isActive && !node.isGatekeeper && <button className="btn btn-primary" onClick={() => onStartLesson(node)}>Start Lesson <Play size={16} /></button>}
                       {isActive && node.isGatekeeper && <button className="btn btn-danger" style={{backgroundColor: isFinalExam ? 'rgba(244,63,94,0.1)' : 'rgba(245,158,11,0.1)', color: isFinalExam ? 'var(--danger)' : 'var(--warning)'}} onClick={() => onStartQuiz(node, isFinalExam)}>Start {isFinalExam ? 'Exam' : 'Quiz'} <BookText size={16} /></button>}
                       {isCompleted && !node.isGatekeeper && <button className="btn btn-secondary" onClick={() => onStartLesson(node)}>Review Lesson</button>}
+                      {isCompleted && !node.isGatekeeper && Array.isArray(node.flashcards) && node.flashcards.length > 0 && onViewFlashcards && (
+                        <button className="btn btn-primary" onClick={() => onViewFlashcards(node)}>
+                          <Brain size={16} /> Flashcards
+                        </button>
+                      )}
                       {isCompleted && node.isGatekeeper && <button className="btn btn-secondary" onClick={() => onStartQuiz(node, isFinalExam)}>Review Results</button>}
                     </div>
                   </div>

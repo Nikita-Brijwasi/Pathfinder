@@ -1,9 +1,9 @@
 import React from 'react';
 import { motion } from 'framer-motion';
-import { Plus, Target, Play, Layers, Calendar, BookOpen, Shield, ChevronRight, Award, History } from 'lucide-react';
+import { Plus, Target, Play, Layers, Calendar, BookOpen, Shield, ChevronRight, Award, History, ArrowRight } from 'lucide-react';
 import { ProgressRing, ActivityCalendar } from './Shared';
 
-export const Dashboard = ({ tracks, userStats, onNewTrack, onSelectTrack, user }) => {
+export const Dashboard = ({ tracks, userStats, onNewTrack, onSelectTrack, user, onViewBadges }) => {
   const activeTracks = tracks.filter(t => t.progress < 100);
   const completedTracks = tracks.filter(t => t.progress === 100);
   const firstName = user?.displayName ? user.displayName.split(' ')[0] : 'Student';
@@ -12,8 +12,8 @@ export const Dashboard = ({ tracks, userStats, onNewTrack, onSelectTrack, user }
     <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -20 }}>
       <div className="section-header">
         <h1 className="section-title" style={{ fontSize: '1.8rem', letterSpacing: '-0.02em', marginBottom: '6px' }}>
-            Welcome back {firstName}
-          </h1>
+          Welcome back {firstName}
+        </h1>
         <button className="btn btn-primary" onClick={onNewTrack}><Plus size={18} /> New Track</button>
       </div>
 
@@ -73,25 +73,51 @@ export const Dashboard = ({ tracks, userStats, onNewTrack, onSelectTrack, user }
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: '2rem' }}>
           <div className="panel">
-            <h3 style={{ marginBottom: '1rem' }}><Award size={18} style={{ verticalAlign: 'middle', marginRight: '6px', color: 'var(--primary)' }} /> Earned Badges</h3>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem' }}>
+              <h3 style={{ margin: 0 }}>
+                <Award size={18} style={{ verticalAlign: 'middle', marginRight: '6px', color: 'var(--primary)' }} /> Earned Badges
+              </h3>
+              {completedTracks.length > 0 && onViewBadges && (
+                <button
+                  onClick={onViewBadges}
+                  className="badge-view-all"
+                  type="button"
+                >
+                  View all <ArrowRight size={14} />
+                </button>
+              )}
+            </div>
             {completedTracks.length === 0 ? (
               <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>Complete roadmaps to earn achievement badges.</p>
             ) : (
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1rem' }}>
-                {completedTracks.map(t => {
+                {completedTracks.slice(0, 3).map(t => {
                   const diffColor = t.difficulty === 'Advanced' ? 'danger' : t.difficulty === 'Intermediate' ? 'primary' : 'accent';
                   return (
-                    <div key={t.id} style={{ textAlign: 'center', backgroundColor: 'var(--bg-dark)', padding: '1rem 0.5rem', borderRadius: '12px', border: `1px solid var(--${diffColor})`, width: '100%', maxWidth: '140px', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+                    <div
+                      key={t.id}
+                      onClick={() => onSelectTrack && onSelectTrack(t.id)}
+                      title="Open roadmap"
+                      style={{ textAlign: 'center', backgroundColor: 'var(--bg-dark)', padding: '1rem 0.5rem', borderRadius: '12px', border: `1px solid var(--${diffColor})`, width: '100%', maxWidth: '140px', display: 'flex', flexDirection: 'column', alignItems: 'center', cursor: 'pointer' }}
+                    >
                       <Shield size={32} color={`var(--${diffColor})`} style={{ marginBottom: '0.5rem' }} />
                       <div style={{ fontSize: '0.8rem', fontWeight: 'bold', lineHeight: '1.2', marginBottom: '0.25rem' }}>{t.title}</div>
                       <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>{t.difficulty || 'Intermediate'}</div>
                     </div>
                   );
                 })}
+                {completedTracks.length > 3 && (
+                  <div
+                    onClick={onViewBadges}
+                    style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '1rem 0.5rem', borderRadius: '12px', border: '1px dashed var(--border)', width: '100%', maxWidth: '140px', cursor: 'pointer', color: 'var(--text-muted)' }}
+                  >
+                    <div style={{ fontSize: '1.4rem', fontWeight: 'bold', color: 'var(--primary)' }}>+{completedTracks.length - 3}</div>
+                    <div style={{ fontSize: '0.7rem' }}>more</div>
+                  </div>
+                )}
               </div>
             )}
           </div>
-
           <div className="panel">
             <h3 style={{ marginBottom: '0.5rem' }}><Calendar size={18} style={{ verticalAlign: 'middle', marginRight: '6px' }} /> Activity Map</h3>
             <ActivityCalendar history={userStats?.activityHistory || {}} />
@@ -103,19 +129,22 @@ export const Dashboard = ({ tracks, userStats, onNewTrack, onSelectTrack, user }
               <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>No evaluations attempted yet.</p>
             ) : (
               <div>
-                {userStats.recentQuizzes.map((quiz, i) => (
-                  <div key={i} className="recent-quiz-item">
-                    <div style={{ overflow: 'hidden' }}>
-                      <div style={{ fontSize: '0.9rem', fontWeight: '600', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{quiz.title}</div>
-                      <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{quiz.track}</div>
+                {userStats.recentQuizzes
+                  .filter((quiz, index, self) =>
+                    index === self.findIndex((q) => q.title === quiz.title && q.track === quiz.track)
+                  ).map((quiz, i) => (
+                    <div key={i} className="recent-quiz-item">
+                      <div style={{ overflow: 'hidden' }}>
+                        <div style={{ fontSize: '0.9rem', fontWeight: '600', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{quiz.title}</div>
+                        <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{quiz.track}</div>
+                      </div>
+                      <div className={`score-badge ${quiz.score >= 70 ? 'pass' : 'fail'}`}>
+                        {Math.round(quiz.score)}%
+                      </div>
                     </div>
-                    <div className={`score-badge ${quiz.score >= 70 ? 'pass' : 'fail'}`}>
-                      {Math.round(quiz.score)}%
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
+                  ))}
+                </div>
+              )}
           </div>
         </div>
       </div>

@@ -5,12 +5,14 @@ import { signInWithCustomToken, signInAnonymously, onAuthStateChanged, signOut }
 import { collection, doc, setDoc, onSnapshot, query } from 'firebase/firestore';
 import { auth, db, appId } from './firebase';
 import { LoginScreen } from './components/LoginScreen';
-import { callGeminiJSON } from './api';
+import { callGeminiJSON, generateFlashcards, askTutor } from './api';
 import { getLocalDateString } from './utils';
 import { Dashboard } from './components/Dashboard';
 import { ArchitectModal } from './components/ArchitectModal';
 import { Roadmap } from './components/Roadmap';
 import { LessonViewer, QuizEvaluator } from './components/Learning';
+import { FlashcardsModal } from './components/Flashcards';
+import { Badges } from './components/Badges';
 
 import './index.css';
 
@@ -27,22 +29,41 @@ export default function PathFinderApp() {
   const [timeLeft, setTimeLeft] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState([]);
+  const [flashcardsNode, setFlashcardsNode] = useState(null);
   const searchContainerRef = useRef(null);
 
   const currentTrack = tracks.find(t => t.id === activeTrackId);
   const currentNode = currentTrack?.nodes.find(n => n.id === activeNodeId);
   const isCurrentlyFinalExam = currentNode && currentTrack && currentNode.id === currentTrack.nodes[currentTrack.nodes.length - 1].id;
 
+  // src/App.jsx
+
   useEffect(() => {
-    if (!auth) { setLoading(false); return; }
+    if (!auth) {
+      setLoading(false);
+      return;
+    }
+
     const initAuth = async () => {
       try {
-        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) await signInWithCustomToken(auth, __initial_auth_token);
-        else await signInAnonymously(auth);
-      } catch (e) { console.error(e); }
+        // Keep this only if your development wrapper uses an initial auth token inject.
+        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+          await signInWithCustomToken(auth, __initial_auth_token);
+        }
+        
+      } catch (e) {
+        console.error("Auth initialization error:", e);
+      }
     };
+
     initAuth();
-    const unsub = onAuthStateChanged(auth, u => { setUser(u); if (!u) setLoading(false); });
+
+    // Listen to authentication state shifts (Login / Logout / Re-auth)
+    const unsub = onAuthStateChanged(auth, u => {
+      setUser(u);
+      setLoading(false); // Make sure loading is disabled once Firebase determines user state
+    });
+
     return () => unsub();
   }, []);
 
@@ -186,9 +207,78 @@ export default function PathFinderApp() {
     }
   };
 
+  // Kicks off background flashcard generation for a completed node.
+  // Fire-and-forget: the lesson UI never waits on this. A failure just
+  // leaves the deck empty (next completion will try again).
+  const queueFlashcards = (track, node) => {
+    if (!track || !node || !node.content) return;
+    if (Array.isArray(node.flashcards) && node.flashcards.length >= 3) return;
+    (async () => {
+      try {
+        const cards = await generateFlashcards({
+          trackTitle: track.title,
+          nodeTitle: node.title,
+          subtopics: node.subtopics || [],
+          lessonContent: node.content,
+        });
+        const newNodes = track.nodes.map(n => n.id === node.id ? { ...n, flashcards: cards } : n);
+        await setDoc(
+          doc(db, 'artifacts', appId, 'users', user.uid, 'learning_tracks', track.id),
+          { nodes: newNodes, updatedAt: Date.now() },
+          { merge: true }
+        );
+      } catch (e) {
+        console.warn('[Flashcards] Background generation failed:', e?.message || e);
+      }
+    })();
+  };
+
+  // Regenerate the current lesson's content (used by the Regenerate button).
+  const regenerateLesson = async (node) => {
+    if (!node || !currentTrack) return;
+    setGenerating(true);
+    setActionText(`Re-synthesizing ${node.title}...`);
+    try {
+      const sysPrompt = `You are an AI Tutor. Output ONLY valid JSON with a 'sections' array. Each section must have a 'type' ("text", "code", or "equation") and 'content'.
+      CRITICAL RULES:
+      1. Format "text" content using raw HTML tags (<ul>, <li>, <h2>, <strong>, etc.). DO NOT use Markdown.
+      2. ONLY include "code" or "equation" sections if they contain actual, functional examples.
+      3. NEVER generate placeholder blocks. If no code/equation applies to the topic, OMIT the object entirely from the JSON array.
+      4. Provide external <a> links in a standard "text" section at the end. Only real, live URLs. No YouTube. No broken links.
+      5. Produce a FRESH explanation - do not repeat phrasing from earlier attempts. Use clearer structure, different examples, and richer detail than a typical pass.`;
+      const prompt = `Deeply explain: ${node.title}. Cover these subtopics: ${(node.subtopics || []).join(', ')}. Context: ${currentTrack.title}. Re-generate from scratch with improved clarity.`;
+
+      const responseText = await callGeminiJSON(sysPrompt, prompt);
+      const lessonData = JSON.parse(responseText);
+
+      // Wipe old flashcards too — they were tied to the old content.
+      const nodes = currentTrack.nodes.map(n => n.id === node.id ? { ...n, content: lessonData, flashcards: [] } : n);
+      await setDoc(
+        doc(db, 'artifacts', appId, 'users', user.uid, 'learning_tracks', currentTrack.id),
+        { nodes, updatedAt: Date.now() },
+        { merge: true }
+      );
+      // Re-generate the flashcard deck for the freshly-rewritten lesson.
+      queueFlashcards({ ...currentTrack, nodes }, { ...node, content: lessonData, flashcards: [] });
+    } catch (e) {
+      console.error('[Regenerate] Failed:', e);
+      alert('Could not regenerate the lesson. Please try again.');
+    } finally {
+      setGenerating(false);
+    }
+  };
+
   const handleStartLesson = async (node) => {
     setActiveNodeId(node.id);
-    if (node.content) { setActiveTab('lesson'); return; }
+    if (node.content) {
+      setActiveTab('lesson');
+      // If a previously-generated lesson is missing its flashcards (older
+      // content from before this feature shipped), backfill them silently.
+      if (!Array.isArray(node.flashcards) || node.flashcards.length < 3) {
+        queueFlashcards(currentTrack, node);
+      }
+      return;
+    }
     setGenerating(true);
     setActionText(`Synthesizing subtopics for ${node.title}...`);
     try {
@@ -205,6 +295,12 @@ export default function PathFinderApp() {
 
       const nodes = currentTrack.nodes.map(n => n.id === node.id ? { ...n, content: lessonData } : n);
       await setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'learning_tracks', currentTrack.id), { nodes, updatedAt: Date.now() }, { merge: true });
+
+      // Generate the flashcard deck in parallel with the user reading the
+      // lesson. By the time they hit "I Understand this Topic", the deck
+      // is already saved and the Flashcards button on the roadmap is live.
+      queueFlashcards({ ...currentTrack, nodes }, { ...node, content: lessonData });
+
       setActiveTab('lesson');
     } catch (e) { alert("Failed to generate lesson content."); } finally { setGenerating(false); }
   };
@@ -215,8 +311,10 @@ export default function PathFinderApp() {
     nodes[nIdx].status = 'completed';
     if (nIdx + 1 < nodes.length && nodes[nIdx + 1].status === 'not-started') nodes[nIdx + 1].status = 'in-progress';
     const progress = (nodes.filter(n => n.status === 'completed').length / nodes.length) * 100;
+    const trackUpdate = { nodes, progress, updatedAt: Date.now() };
+    if (progress === 100 && !currentTrack.completedAt) trackUpdate.completedAt = Date.now();
     await Promise.all([
-      setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'learning_tracks', currentTrack.id), { nodes, progress, updatedAt: Date.now() }, { merge: true }),
+      setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'learning_tracks', currentTrack.id), trackUpdate, { merge: true }),
       recordActivity('lesson', { trackTitle: currentTrack.title, nodeTitle: currentNode.title })
     ]);
     setActiveTab('roadmap');
@@ -228,17 +326,32 @@ export default function PathFinderApp() {
     setGenerating(true);
     setActionText(`Compiling ${isFinalExam ? 'Final Exam' : 'Quiz'}...`);
     try {
-      // UPDATED: Added strict JSON schema instructions
-      const sysPrompt = `Act as a strict evaluator for ${currentTrack.difficulty} level. Output ONLY valid JSON with a "questions" array. 
-    Each object in the array MUST have: 
-    1. "question": The text of the question.
-    2. "options": An array of exactly 4 strings.
-    3. "correctIndex": A number (0-3) indicating the correct answer index.`;
+      // UPDATED: Strict JSON schema + explicit question count (final exam >= 10)
+      const questionCount = isFinalExam ? 12 : 5;
 
-      const prompt = `Generate an evaluation for the topic: ${node.title}. Focus on these subtopics: ${node.subtopics.join(', ')}.`;
+      const sysPrompt = `Act as a strict evaluator for ${currentTrack.difficulty} level. Output ONLY valid JSON with a "questions" array.
+CRITICAL RULES:
+1. The "questions" array MUST contain EXACTLY ${questionCount} question objects. Not fewer, not more.
+2. Each object MUST have:
+   - "question": The text of the question (string).
+   - "options": An array of EXACTLY 4 distinct strings.
+   - "correctIndex": A number (0-3) indicating the correct answer index.
+3. ${isFinalExam
+        ? 'This is a COMPREHENSIVE FINAL EXAM. Cover ALL subtopics across the entire curriculum. Mix difficulty: ~30% recall, ~40% application, ~30% analysis/synthesis.'
+        : 'This is a module quiz. Focus tightly on the listed subtopics.'}
+4. Do not duplicate questions. Each question must test a distinct concept.`;
+
+      const prompt = isFinalExam
+        ? `Generate the FINAL EXAM for the track "${currentTrack.title}". Cover the full curriculum across these modules: ${currentTrack.nodes.map(n => n.title).join('; ')}. Produce exactly ${questionCount} questions spanning all major topics.`
+        : `Generate a ${questionCount}-question evaluation for the topic: ${node.title}. Focus on these subtopics: ${node.subtopics.join(', ')}.`;
 
       const responseText = await callGeminiJSON(sysPrompt, prompt);
       const quizData = JSON.parse(responseText);
+
+      // Safety net: if final exam came back undersized, throw so the retry layer can try again
+      if (isFinalExam && (!quizData.questions || quizData.questions.length < 10)) {
+        throw new Error(`Final exam returned only ${quizData.questions?.length || 0} questions, expected ${questionCount}.`);
+      }
 
       const nodes = currentTrack.nodes.map(n => n.id === node.id ? { ...n, quizData } : n);
       await setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'learning_tracks', currentTrack.id), { nodes, updatedAt: Date.now() }, { merge: true });
@@ -262,12 +375,35 @@ export default function PathFinderApp() {
       if (nodes[nIdx].failedAttempts >= 2) deadlineShift = Math.ceil(nodes[nIdx].estimatedHours / 2);
     }
     const progress = (nodes.filter(x => x.status === 'completed').length / nodes.length) * 100;
-    await Promise.all([
-      setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'learning_tracks', currentTrack.id), {
-        nodes, progress, currentDeadlineDays: currentTrack.currentDeadlineDays + deadlineShift, updatedAt: Date.now()
-      }, { merge: true }),
-      recordActivity('quiz', { trackTitle: currentTrack.title, nodeTitle: nodes[nIdx].title, score: percentage })
+    const trackUpdate = {
+      nodes, progress, currentDeadlineDays: currentTrack.currentDeadlineDays + deadlineShift, updatedAt: Date.now()
+    };
+    if (progress === 100 && !currentTrack.completedAt) trackUpdate.completedAt = Date.now();
+
+    // Optimistic update: advance UI immediately so Submit never appears frozen.
+    setTracks(prev => prev.map(t => t.id === currentTrack.id ? { ...t, ...trackUpdate } : t));
+
+    // Bound background Firestore writes with a timeout so a blocked network (e.g. ad-blocker
+    // blocking firestore.googleapis.com) cannot hang the await indefinitely.
+    const withTimeout = (p, ms) => Promise.race([
+      p,
+      new Promise((_, rej) => setTimeout(() => rej(new Error('Firestore write timed out')), ms))
     ]);
+
+    try {
+      await Promise.all([
+        withTimeout(
+          setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'learning_tracks', currentTrack.id), trackUpdate, { merge: true }),
+          8000
+        ),
+        withTimeout(
+          recordActivity('quiz', { trackTitle: currentTrack.title, nodeTitle: nodes[nIdx].title, score: percentage }),
+          8000
+        )
+      ]);
+    } catch (e) {
+      console.warn('Quiz attempt saved locally but Firestore write failed:', e?.message || e);
+    }
   };
 
 
@@ -336,12 +472,21 @@ export default function PathFinderApp() {
           </div>
         )}
         <AnimatePresence mode="wait">
-          {activeTab === 'dashboard' && <Dashboard user={user} tracks={tracks} userStats={userStats} onNewTrack={() => setActiveTab('architect')} onSelectTrack={id => { setActiveTrackId(id); setActiveTab('roadmap'); }} />}
+          {activeTab === 'dashboard' && <Dashboard user={user} tracks={tracks} userStats={userStats} onNewTrack={() => setActiveTab('architect')} onSelectTrack={id => { setActiveTrackId(id); setActiveTab('roadmap'); }} onViewBadges={() => setActiveTab('badges')} />}
+          {activeTab === 'badges' && <Badges user={user} tracks={tracks} onBack={() => setActiveTab('dashboard')} onViewRoadmap={(track) => { setActiveTrackId(track.id); setActiveTab('roadmap'); }} />}
           {activeTab === 'architect' && <ArchitectModal onCancel={() => setActiveTab('dashboard')} onGenerate={generateCurriculum} generating={generating} actionText={actionText} />}
-          {activeTab === 'roadmap' && <Roadmap track={currentTrack} onBack={() => setActiveTab('dashboard')} onStartLesson={handleStartLesson} onStartQuiz={handleStartQuiz} />}
-          {activeTab === 'lesson' && <LessonViewer node={currentNode} onBack={() => setActiveTab('roadmap')} onComplete={completeLesson} />}
+          {activeTab === 'roadmap' && <Roadmap track={currentTrack} onBack={() => setActiveTab('dashboard')} onStartLesson={handleStartLesson} onStartQuiz={handleStartQuiz} onViewFlashcards={(node) => setFlashcardsNode(node)} />}
+          {activeTab === 'lesson' && <LessonViewer node={currentNode} track={currentTrack} onBack={() => setActiveTab('roadmap')} onComplete={completeLesson} onRegenerate={regenerateLesson} />}
           {activeTab === 'quiz' && <QuizEvaluator node={currentNode} isFinalExam={isCurrentlyFinalExam} onBack={() => setActiveTab('roadmap')} onSubmitAttempt={submitQuizAttempt} />}
         </AnimatePresence>
+        {flashcardsNode && (
+          <FlashcardsModal
+            user={user}
+            track={currentTrack}
+            node={flashcardsNode}
+            onClose={() => setFlashcardsNode(null)}
+          />
+        )}
       </main>
     </div>
   );

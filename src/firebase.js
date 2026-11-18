@@ -5,14 +5,14 @@ import { getFirestore } from 'firebase/firestore';
 import { GoogleAuthProvider } from 'firebase/auth';
 
 const firebaseConfig = {
-  apiKey: "AIzaSyAP9QY0B_R_lhgFEdQQz1bLVcYdY28-bVY",
-  authDomain: "pathfinder-a98bd.firebaseapp.com",
-  projectId: "pathfinder-a98bd",
-  storageBucket: "pathfinder-a98bd.firebasestorage.app",
-  messagingSenderId: "87130017761",
-  appId: "1:87130017761:web:141be70519814202e84ca0"
+  apiKey: "AIzaSyAwdpV5C72IynDkZ5oFPsiO5KUqcFZEjUE",
+  authDomain: "sandbox-pathfinder.firebaseapp.com",
+  projectId: "sandbox-pathfinder",
+  storageBucket: "sandbox-pathfinder.firebasestorage.app",
+  messagingSenderId: "1095126790201",
+  appId: "1:1095126790201:web:796f29725e8c6adcf31de8",
+  measurementId: "G-DQKQPMEJ16"
 };
-
 
 // Initialize Firebase
 const app = initializeApp(firebaseConfig);
